@@ -1,0 +1,85 @@
+name: Build Android BANGR
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+env:
+  KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+  KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+  KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+  KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Ouvrir le projet
+        run: unzip -q bangr-projet.zip -d app
+      - name: Installer et tester
+        working-directory: app
+        run: |
+          npm install
+          npm test
+      - name: Construire le site
+        working-directory: app
+        run: npm run build
+      - name: Creer le projet Android (Capacitor 8)
+        working-directory: app
+        run: |
+          npm install --no-save @capacitor/core@8 @capacitor/cli@8 @capacitor/android@8
+          npx cap init "BANGR" com.bangr.boutique --web-dir dist
+          npx cap add android
+          sed -i 's/>BANGR</>B\&#195;NGR</g' android/app/src/main/res/values/strings.xml
+          grep -n "NGR" android/app/src/main/res/values/strings.xml
+      - name: Icone (facultatif)
+        working-directory: app
+        continue-on-error: true
+        run: |
+          mkdir -p assets
+          cp icon-1024.png assets/icon.png
+          npm install --no-save @capacitor/assets@3
+          npx capacitor-assets generate --android --iconBackgroundColor "#0f4d2e" --iconBackgroundColorDark "#0f4d2e"
+      - name: Numero de version
+        working-directory: app/android/app
+        run: |
+          sed -E -i "s/versionCode [0-9]+/versionCode ${{ github.run_number }}/" build.gradle
+          sed -E -i "s/versionName \"[^\"]*\"/versionName \"0.3.${{ github.run_number }}\"/" build.gradle
+          grep -E "versionCode|versionName|targetSdk|compileSdk" build.gradle ../variables.gradle || true
+      - name: Synchroniser
+        working-directory: app
+        run: npx cap sync android
+      - name: APK de test (cle de test)
+        run: |
+          mkdir -p ~/.android
+          cp app/debug.keystore ~/.android/debug.keystore
+          cd app/android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+      - name: Bundle AAB pour le Play Store
+        if: env.KS_B64 != ''
+        working-directory: app/android
+        run: ./gradlew bundleRelease
+      - name: Signer l'AAB avec la cle d'envoi
+        if: env.KS_B64 != ''
+        run: |
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          cp app/android/app/build/outputs/bundle/release/app-release.aab bangr-play.aab
+          jarsigner -keystore "$RUNNER_TEMP/upload.jks" -storepass "$KS_PASS" -keypass "$KEY_PASS" -sigalg SHA256withRSA -digestalg SHA-256 bangr-play.aab "$KEY_ALIAS"
+          jarsigner -verify bangr-play.aab | head -3
+      - name: Publier
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-${{ github.run_number }}
+          name: BANGR Android ${{ github.run_number }}
+          files: |
+            app/android/app/build/outputs/apk/debug/app-debug.apk
+            bangr-play.aab
