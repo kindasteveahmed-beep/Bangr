@@ -1,0 +1,40 @@
+name: Build Windows BANGR
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Ouvrir le projet
+        shell: pwsh
+        run: Expand-Archive -Path bangr-projet.zip -DestinationPath app
+      - name: Construire le site
+        working-directory: app
+        run: |
+          npm install
+          npm run build
+      - name: Preparer l'application Windows
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse app/dist app/desktop/dist
+          Copy-Item app/icon-1024.png app/desktop/build/icon.png
+      - name: Fabriquer le .exe
+        working-directory: app/desktop
+        run: |
+          npm install
+          npx electron-builder --win nsis portable --publish never
+      - name: Publier
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-${{ github.run_number }}
+          name: BANGR Windows ${{ github.run_number }}
+          files: |
+            app/desktop/release/*.exe
